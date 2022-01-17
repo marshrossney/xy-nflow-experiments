@@ -46,25 +46,25 @@ class Prior(torch.utils.data.IterableDataset):
 class Composition(torch.nn.Sequential):
     """Compose multiple layers."""
 
-    def forward(self, x: Tensor, log_det_jacob: Tensor) -> tuple[Tensor]:
+    def forward(self, x: Tensor, log_det_jacob: Tensor, *args) -> tuple[Tensor]:
         for layer in self:
-            x, log_det_jacob = layer(x, log_det_jacob)
+            x, log_det_jacob = layer(x, log_det_jacob, *args)
         return x, log_det_jacob
 
-    def inverse(self, x: Tensor, log_det_jacob: Tensor) -> tuple[Tensor]:
+    def inverse(self, x: Tensor, log_det_jacob: Tensor, *args) -> tuple[Tensor]:
         for layer in reversed(self):
-            x, log_det_jacob = layer.inverse(x, log_det_jacob)
+            x, log_det_jacob = layer.inverse(x, log_det_jacob, *args)
         return x, log_det_jacob
 
 
 class Flow(Composition):
     """Wraps around Composition, starting with zero log det Jacobian."""
 
-    def forward(self, x: Tensor) -> tuple[Tensor]:
-        return super().forward(x, torch.zeros(x.shape[0]).to(x.device))
+    def forward(self, x: Tensor, *args) -> tuple[Tensor]:
+        return super().forward(x, torch.zeros(x.shape[0]).to(x.device), *args)
 
-    def inverse(self, x: Tensor) -> tuple[Tensor]:
-        return super().inverse(x, torch.zeros(x.shape[0]).to(x.device))
+    def inverse(self, x: Tensor, *args) -> tuple[Tensor]:
+        return super().inverse(x, torch.zeros(x.shape[0]).to(x.device), *args)
 
 
 def make_checkerboard(lattice_shape: list[int]) -> BoolTensor:
@@ -102,6 +102,31 @@ class RandomRotationLayer(torch.nn.Module):
 
     def inverse(self, x: Tensor, log_det_jacob: Tensor) -> tuple[Tensor]:
         return self.forward(x, log_det_jacob)
+
+
+class MobiusLayer(torch.nn.Module):
+    """Applies a mobius transform to uniform variates producing wrapped Cauchy variates."""
+
+    def forward(
+        self, x: Tensor, log_det_jacob: Tensor, vonmises_conc: Tensor
+    ) -> tuple[Tensor]:
+        """wrapped Cauchy FWHM = 2 * vonmises_conc."""
+        rho = (-1 / vonmises_conc.sqrt()).exp()
+        beta = (1 - rho).div(1 + rho)
+        x.div_(2).tan_().mul_(beta).atan_().mul_(2)
+        gradient = (1 - rho.pow(2)).div(1 + rho.pow(2) - 2 * rho * x.cos())
+        log_det_jacob.sub_(gradient.log().flatten(start_dim=1).sum(dim=1))
+        return x, log_det_jacob
+
+    def inverse(
+        self, x: Tensor, log_det_jacob: Tensor, vonmises_conc: Tensor
+    ) -> tuple[Tensor]:
+        rho = (-1 / vonmises_conc.sqrt()).exp()
+        gradient = (1 - rho.pow(2)).div(1 + rho.pow(2) - 2 * rho * x.cos())
+        log_det_jacob.add_(gradient.log().flatten(start_dim=1).sum(dim=1))
+        beta_inv = (1 + rho).div(1 - rho)
+        x.div_(2).tan_().mul_(beta_inv).atan_().mul_(2)
+        return x, log_det_jacob
 
 
 def spins_to_links(spins: Tensor) -> Tensor:

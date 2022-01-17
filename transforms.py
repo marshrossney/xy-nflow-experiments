@@ -174,6 +174,25 @@ _test_x_rt, _test_ldj_inv = _test_spline.inverse(_test_y, _test_params)
 assert torch.allclose(_test_x, _test_x_rt, atol=1e-5)
 assert torch.allclose(_test_ldj, -_test_ldj_inv, atol=1e-5)
 
+class PointwiseAdditiveTransform:
+    """Learnable phase shift."""
+
+    params_dof: int = 1
+    identity_params = torch.Tensor([0.0])
+
+    def __call__(self, inputs: Tensor, params: Tensor) -> tuple[Tensor]:
+        return self.forward(inputs, params)
+
+    def forward(self, inputs: Tensor, shift: Tensor) -> tuple[Tensor]:
+        # Don't do in-place operations, just to be safe
+        outputs = inputs.add(shift)
+        log_det_jacob = torch.zeros(inputs.shape[0]).type_as(inputs)
+        return outputs, log_det_jacob
+
+    def inverse(self, inputs: Tensor, shift: Tensor) -> tuple[Tensor]:
+        outputs = inputs.sub(shift)
+        log_det_jacob = torch.zeros(inputs.shape[0]).type_as(inputs)
+        return outputs, log_det_jacob
 
 class PointwisePhaseShift:
     """Learnable phase shift."""
@@ -204,3 +223,4 @@ _test_y, _test_ldj = _test_shift.forward(_test_x, _test_params)
 _test_x_rt, _test_ldj_inv = _test_shift.inverse(_test_y, _test_params)
 assert torch.allclose(_test_x, _test_x_rt, atol=1e-5)
 assert torch.allclose(_test_ldj, -_test_ldj_inv, atol=1e-5)
+
