@@ -30,6 +30,8 @@ class MetropolisSampler:
             "energy": [],
             "magnetisation_sq": [],
         }
+        self.history["energy"].append(self.global_energy())
+        self.history["magnetisation_sq"].append(self.global_magnetisation_sq())
 
     def _build_neighbour_lists(self):
         indices = torch.arange(self.lattice_size).view(self.lattice_shape)
@@ -102,8 +104,8 @@ class MetropolisSampler:
 
                 if random() < math.exp(-delta_local_energy):
                     self.config[spin_idx] = (
-                        math.fmod(central_spin + delta_spin + PI, 2 * PI) - PI
-                    )
+                        (central_spin + delta_spin + PI) % (2 * PI)
+                    ) - PI
                     n_accepted += 1
 
             self.history["energy"].append(self.global_energy())
@@ -130,7 +132,7 @@ class HeatbathSampler(MetropolisSampler):
                 m2 = sum([math.sin(spin) for spin in neighbours])
 
                 # von Mises parameters
-                kappa = self.coupling_strength * math.sqrt(m1 ** 2 + m2 ** 2)
+                kappa = max(0.01, self.coupling_strength * math.sqrt(m1 ** 2 + m2 ** 2))
                 theta = math.atan2(m2, m1)
 
                 new_spin = scipy.stats.vonmises.rvs(kappa, loc=theta)
@@ -169,37 +171,46 @@ class CheckerboardGibbsSampler:
         padding = tuple(1 for edge in range(2 * self.lattice_dim))
         self.pad = lambda config: F.pad(config, padding, "circular")
 
+    def global_energy(self):
+        # return -self.coupling_strength * (cos_config * m1 + sin_config * m2).sum().div(2)
+        return float(
+            -self.coupling_strength
+            * torch.stack(
+                [
+                    torch.cos(self.config - self.config.roll(-1, dim))
+                    for dim in range(2, 2 + self.lattice_dim)
+                ],
+                dim=0,
+            ).sum()
+        )
+
     def sample(self, n_sweeps: int):
 
         m1 = self.conv(self.pad(self.config.cos()), self.kernel)
         m2 = self.conv(self.pad(self.config.sin()), self.kernel)
+        
+        magnetisation_sq = float(self.config.cos().sum().pow(2) + self.config.sin().sum().pow(2))
+        self.history["energy"].append(self.global_energy())
+        self.history["magnetisation_sq"].append(magnetisation_sq)
 
         for sweep in range(n_sweeps):
 
             for mask in (self.checker, ~self.checker):
-
+                m1 = m1[..., mask]
+                m2 = m2[..., mask]
                 kappa = self.coupling_strength * (m1.pow(2) + m2.pow(2)).sqrt()
                 kappa.clamp_(min=0.01)  # otherwise sampling takes AGES
                 theta = torch.atan2(m2, m1)
 
-                new_config = torch.distributions.VonMises(theta, kappa).sample()
-                self.config.masked_scatter_(mask, new_config)
+                new_spins = torch.distributions.VonMises(
+                    loc=theta, concentration=kappa
+                ).sample()
+                self.config.masked_scatter_(mask, new_spins)
 
                 cos_config, sin_config = self.config.cos(), self.config.sin()
                 m1 = self.conv(self.pad(cos_config), self.kernel)
                 m2 = self.conv(self.pad(sin_config), self.kernel)
 
-            # energy = -self.coupling_strength * (cos_config * m1 + sin_config * m2).sum().div(2)
-            energy = (
-                -self.coupling_strength
-                * torch.stack(
-                    [
-                        torch.cos(self.config - self.config.roll(-1, -dim))
-                        for dim in range(self.lattice_dim)
-                    ],
-                    dim=0,
-                ).sum()
-            )
-            magnetisation_sq = cos_config.sum().pow(2) + sin_config.sum().pow(2)
-            self.history["energy"].append(energy)
+            magnetisation_sq = float(cos_config.sum().pow(2) + sin_config.sum().pow(2))
+            self.history["energy"].append(self.global_energy())
             self.history["magnetisation_sq"].append(magnetisation_sq)
