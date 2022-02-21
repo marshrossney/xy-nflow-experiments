@@ -8,6 +8,8 @@ from typing import Iterable
 import torch
 import pytorch_lightning as pl
 import tqdm
+import scipy.signal
+import numpy as np
 
 Tensor: TypeAlias = torch.Tensor
 BoolTensor: TypeAlias = torch.BoolTensor
@@ -190,6 +192,38 @@ def magnetisation_sq(spins: Tensor) -> Tensor:
         .sum(dim=1)  # M_x^2 + M_y^2
     )
 
+def autocorrelation(chain: Tensor):
+    signal = chain.sub(chain.mean()).numpy()
+    autocorr = scipy.signal.correlate(signal, signal, mode="same")
+    t0 = autocorr.size // 2
+    autocorr = autocorr[t0:] / autocorr[t0]
+    return autocorr
+
+def integrated_autocorrelation(chain: Tensor):
+    autocorr = autocorrelation(chain)
+    integrated = np.cumsum(autocorr)
+    
+    with np.errstate(invalid="ignore", divide="ignore"):
+        exponential = np.clip(
+            np.nan_to_num(2.0 / np.log((2 * integrated + 1) / (2 * integrated - 1))),
+            a_min=1e-6,
+            a_max=None,
+        )
+
+    # Infer ensemble size. Assumes correlation mode was 'same'
+    n_t = integrated.shape[-1]
+    ensemble_size = n_t * 2
+
+    # g_func is the derivative of the sum of errors wrt window size
+    window = np.arange(1, n_t + 1)
+    g_func = np.exp(-window / exponential) - exponential / np.sqrt(
+        window * ensemble_size
+    )
+
+    # Return first occurrence of g_func changing sign
+    w = np.argmax((g_func[..., 1:] < 0), axis=-1)
+
+    return integrated[w]
 
 class JlabProgBar(pl.callbacks.TQDMProgressBar):
     """Disable validation progress bar since it's broken in Jupyter Lab."""

@@ -188,8 +188,10 @@ class CheckerboardGibbsSampler:
 
         m1 = self.conv(self.pad(self.config.cos()), self.kernel)
         m2 = self.conv(self.pad(self.config.sin()), self.kernel)
-        
-        magnetisation_sq = float(self.config.cos().sum().pow(2) + self.config.sin().sum().pow(2))
+
+        magnetisation_sq = float(
+            self.config.cos().sum().pow(2) + self.config.sin().sum().pow(2)
+        )
         self.history["energy"].append(self.global_energy())
         self.history["magnetisation_sq"].append(magnetisation_sq)
 
@@ -212,5 +214,102 @@ class CheckerboardGibbsSampler:
                 m2 = self.conv(self.pad(sin_config), self.kernel)
 
             magnetisation_sq = float(cos_config.sum().pow(2) + sin_config.sum().pow(2))
+            self.history["energy"].append(self.global_energy())
+            self.history["magnetisation_sq"].append(magnetisation_sq)
+
+
+class HubbardStratonovichGibbsSampler:
+    def __init__(self, init_config: Tensor, coupling_strength: float):
+        self.lattice_shape = list(init_config.shape)
+        self.lattice_dim = init_config.dim()
+        self.lattice_size = utils.prod(self.lattice_shape)
+        self.coupling_strength = coupling_strength
+        self.sqrt_coupling_strength = math.sqrt(self.coupling_strength)
+
+        self.config = init_config.unsqueeze(dim=0).unsqueeze(
+            dim=0
+        )  # (1, 1, *lattice_shape)
+
+        self.history = {
+            "energy": [],
+            "magnetisation_sq": [],
+        }
+
+        if self.lattice_dim == 1:
+            self.kernel = torch.Tensor([1, 0, 1]).view(1, 1, 3)
+            self.conv = F.conv1d
+        elif self.lattice_dim == 2:
+            self.kernel = torch.Tensor([[0, 1, 0], [1, 0, 1], [0, 1, 0]]).view(
+                1, 1, 3, 3
+            )
+            self.conv = F.conv2d
+
+        padding = tuple(1 for edge in range(2 * self.lattice_dim))
+        self.pad = lambda config: F.pad(config, padding, "circular")
+
+        shape = [1, self.lattice_dim, 2, *self.lattice_shape]
+        self.gaussian = torch.distributions.Normal(
+            loc=torch.zeros(shape), scale=torch.ones(shape)
+        )
+
+    def global_energy(self):
+        # return -self.coupling_strength * (cos_config * m1 + sin_config * m2).sum().div(2)
+        return float(
+            -self.coupling_strength
+            * torch.stack(
+                [
+                    torch.cos(self.config - self.config.roll(-1, dim))
+                    for dim in range(2, 2 + self.lattice_dim)
+                ],
+                dim=0,
+            ).sum()
+        )
+
+    def sample(self, n_sweeps: int):
+
+        magnetisation_sq = float(
+            self.config.cos().sum().pow(2) + self.config.sin().sum().pow(2)
+        )
+        self.history["energy"].append(self.global_energy())
+        self.history["magnetisation_sq"].append(magnetisation_sq)
+
+        for sweep in range(n_sweeps):
+
+            # shape (1, 1, 2, *lattice_shape)
+            cos_sin_config = torch.stack([self.config.cos(), self.config.sin()], dim=2)
+
+            # shape (1, lattice_dim, 2, *lattice_shape)
+            current = torch.cat(
+                [
+                    cos_sin_config + cos_sin_config.roll(-1, dim)
+                    for dim in range(3, 3 + self.lattice_dim)
+                ],
+                dim=1,
+            )
+            auxvars = self.gaussian.sample() + self.sqrt_coupling_strength * current
+
+            local_field_strength = torch.zeros_like(cos_sin_config)
+            for auxvars_mu, dim in zip(
+                auxvars.split(1, dim=1), range(3, 3 + self.lattice_dim)
+            ):
+                local_field_strength.add_(auxvars_mu)
+                local_field_strength.add_(auxvars_mu.roll(+1, dim))
+
+            kappa = (
+                self.sqrt_coupling_strength
+                * local_field_strength.pow(2).sum(dim=2).sqrt()
+            )
+            kappa.clamp_(min=0.01)
+            theta = torch.atan2(
+                local_field_strength[:, :, 1], local_field_strength[:, :, 0]
+            )
+
+            self.config = torch.distributions.VonMises(
+                loc=theta, concentration=kappa
+            ).sample()
+
+            magnetisation_sq = float(
+                self.config.cos().sum().pow(2) + self.config.sin().sum().pow(2)
+            )
             self.history["energy"].append(self.global_energy())
             self.history["magnetisation_sq"].append(magnetisation_sq)
