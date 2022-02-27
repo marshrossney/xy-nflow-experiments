@@ -159,14 +159,13 @@ class CheckerboardGibbsSampler:
             "magnetisation_sq": [],
         }
 
+        self.kernel = utils.nearest_neighbour_kernel(self.lattice_dim)
         if self.lattice_dim == 1:
-            self.kernel = torch.Tensor([1, 0, 1]).view(1, 1, 3)
             self.conv = F.conv1d
         elif self.lattice_dim == 2:
-            self.kernel = torch.Tensor([[0, 1, 0], [1, 0, 1], [0, 1, 0]]).view(
-                1, 1, 3, 3
-            )
             self.conv = F.conv2d
+        elif self.lattice_dim == 3:
+            self.conv = F.conv3d
 
         padding = tuple(1 for edge in range(2 * self.lattice_dim))
         self.pad = lambda config: F.pad(config, padding, "circular")
@@ -235,14 +234,13 @@ class HubbardStratonovichGibbsSampler:
             "magnetisation_sq": [],
         }
 
+        self.kernel = utils.nearest_neighbour_kernel(self.lattice_dim)
         if self.lattice_dim == 1:
-            self.kernel = torch.Tensor([1, 0, 1]).view(1, 1, 3)
             self.conv = F.conv1d
         elif self.lattice_dim == 2:
-            self.kernel = torch.Tensor([[0, 1, 0], [1, 0, 1], [0, 1, 0]]).view(
-                1, 1, 3, 3
-            )
             self.conv = F.conv2d
+        elif self.lattice_dim == 3:
+            self.conv = F.conv3d
 
         padding = tuple(1 for edge in range(2 * self.lattice_dim))
         self.pad = lambda config: F.pad(config, padding, "circular")

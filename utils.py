@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import math
 import logging
 from random import random
@@ -192,6 +193,7 @@ def magnetisation_sq(spins: Tensor) -> Tensor:
         .sum(dim=1)  # M_x^2 + M_y^2
     )
 
+
 def autocorrelation(chain: Tensor):
     signal = chain.sub(chain.mean()).numpy()
     autocorr = scipy.signal.correlate(signal, signal, mode="same")
@@ -199,10 +201,11 @@ def autocorrelation(chain: Tensor):
     autocorr = autocorr[t0:] / autocorr[t0]
     return autocorr
 
+
 def integrated_autocorrelation(chain: Tensor):
     autocorr = autocorrelation(chain)
     integrated = np.cumsum(autocorr)
-    
+
     with np.errstate(invalid="ignore", divide="ignore"):
         exponential = np.clip(
             np.nan_to_num(2.0 / np.log((2 * integrated + 1) / (2 * integrated - 1))),
@@ -225,11 +228,23 @@ def integrated_autocorrelation(chain: Tensor):
 
     return integrated[w]
 
+
 class JlabProgBar(pl.callbacks.TQDMProgressBar):
     """Disable validation progress bar since it's broken in Jupyter Lab."""
 
     def init_validation_tqdm(self):
         return tqdm.tqdm(disable=True)
+
+
+def nearest_neighbour_kernel(lattice_dim):
+    identity_kernel = torch.zeros([3 for _ in range(lattice_dim)])
+    identity_kernel.view(-1)[pow(3, lattice_dim) // 2] = 1
+
+    nn_kernel = torch.zeros([3 for _ in range(lattice_dim)])
+    for shift, dim in itertools.product([+1, -1], range(lattice_dim)):
+        nn_kernel.add_(identity_kernel.roll(shift, dim))
+
+    return nn_kernel.view(1, 1, *nn_kernel.shape)
 
 
 """
